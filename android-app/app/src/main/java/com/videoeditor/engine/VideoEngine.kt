@@ -46,7 +46,7 @@ class VideoEngine(private val context: Context) {
             if (v != 0) return@withContext Result.failure(IllegalArgumentException("Rust validate failed"))
 
             // Single clip path first; concat loops over clips sequentially
-            val muxer = MuxerWrapper(req.outPath).init()
+            val muxerWrapper = MuxerWrapper(req.outPath).also { it.init() }
 
             // Encoder setup
             val encoder = Encoder(req.outWidth, req.outHeight, req.bitrate, req.fps).init()
@@ -125,7 +125,7 @@ class VideoEngine(private val context: Context) {
                             try { RustBridge.processFrameYUV420(i420.y, i420.u, i420.v, i420.width, i420.height, req.filterJson) } catch (e: Exception) { Log.w("VideoEngine", "Rust filter failed: $e") }
                         }
                         // Crop/scale if requested (demo: scale to out dims)
-                        val toEncode: YUVConverter.I420Buffers
+                        var toEncode: YUVConverter.I420Buffers
                         if (req.crop != null) {
                             // Rust crop dimensions helper
                             val packed = try { RustBridge.getCroppedDimensions(i420.width, i420.height, req.crop.x, req.crop.y, req.crop.w, req.crop.h) } catch (_: Throwable) { 0L }
@@ -177,13 +177,13 @@ class VideoEngine(private val context: Context) {
                 var encOut = encoder.dequeueOutputBuffer(bufferInfo, 10000)
                 if (encOut == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     val fmt = encoder.outputFormat
-                    if (!muxerStarted) { muxer.addVideoTrack(fmt); muxerStarted = true }
+                    if (!muxerStarted) { muxerWrapper.addVideoTrack(fmt); muxerStarted = true }
                 } else if (encOut >= 0) {
                     val encBuf = encoder.getOutputBuffer(encOut)!!
                     if (bufferInfo.size > 0 && muxerStarted) {
                         // Adjust BufferInfo position
                         encBuf.position(bufferInfo.offset); encBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        muxer.writeVideoSample(encBuf, bufferInfo)
+                        muxerWrapper.writeVideoSample(encBuf, bufferInfo)
                     }
                     encoder.releaseOutputBuffer(encOut, false)
                     if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) sawOutputEOS = true
@@ -197,7 +197,7 @@ class VideoEngine(private val context: Context) {
             decoder.stop(); decoder.release()
             encoder.stop(); encoder.release()
             decoderInfo.release()
-            muxer.release()
+            muxerWrapper.release()
             progress.value = 100; onProgress(100)
             Result.success(req.outPath)
         } catch (e: Exception) {

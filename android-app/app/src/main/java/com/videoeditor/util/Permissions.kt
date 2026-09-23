@@ -2,10 +2,6 @@ package com.videoeditor.util
 
 import android.Manifest
 import android.os.Build
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import com.google.accompanist.permissions.ExperimentalPermissionsApi
-import com.google.accompanist.permissions.rememberMultiplePermissionsState
 
 /** Permissions for API 29+ */
 object Permissions {
