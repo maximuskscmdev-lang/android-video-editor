@@ -25,16 +25,19 @@ jobs:
           java-version: 17
           cache: gradle
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Install Android SDK packages & NDK
         run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          ls -la "$ANDROID_HOME/cmdline-tools/" || true
+          # Accept licenses non-interactively (required before install)
+          yes | sdkmanager --licenses || true
+          # Install required packages (platform-tools etc already preinstalled on ubuntu-latest, but ensure NDK + platforms)
           sdkmanager --install "platform-tools" "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.1.10909125" >> $GITHUB_ENV
           echo "NDK installed:"
-          ls -lh $ANDROID_HOME/ndk/26.1.10909125 || true
-          ndk-build --version || $ANDROID_HOME/ndk/26.1.10909125/ndk-build --version || true
+          ls -lh "$ANDROID_HOME/ndk/26.1.10909125" || true
+          ndk-build --version || "$ANDROID_HOME/ndk/26.1.10909125/ndk-build" --version || true
 
       - name: Set up Rust stable + Android target
         uses: dtolnay/rust-toolchain@stable
