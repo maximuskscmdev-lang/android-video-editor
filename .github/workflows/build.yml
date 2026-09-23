@@ -27,9 +27,12 @@ jobs:
 
       - name: Install Android SDK packages & NDK
         run: |
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           echo "ANDROID_HOME=$ANDROID_HOME"
           echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          echo "PATH=$PATH"
           ls -la "$ANDROID_HOME/cmdline-tools/" || true
+          which sdkmanager || ls -lh "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           # Accept licenses non-interactively (required before install)
           yes | sdkmanager --licenses || true
           # Install required packages (platform-tools etc already preinstalled on ubuntu-latest, but ensure NDK + platforms)
