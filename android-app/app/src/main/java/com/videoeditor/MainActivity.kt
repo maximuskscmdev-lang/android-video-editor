@@ -86,8 +86,12 @@ fun App() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Video Editor • ${timeline.totalDurationMs / 1000f}s") },
-                subtitle = { Text(rustVer, style = MaterialTheme.typography.labelSmall) },
+                title = {
+                    Column {
+                        Text("Video Editor • ${timeline.totalDurationMs / 1000f}s")
+                        Text(rustVer, style = MaterialTheme.typography.labelSmall, color = EditorColors.Sub)
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = EditorColors.Background,
                     titleContentColor = EditorColors.Text
