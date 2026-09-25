@@ -1,6 +1,7 @@
 package com.videoeditor.ui
 
 import android.net.Uri
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.*
@@ -11,7 +12,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -22,6 +28,10 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.videoeditor.timeline.ClipTransform
 import com.videoeditor.timeline.TimelineState
+import com.videoeditor.ui.theme.EditorColors
+import com.videoeditor.ui.theme.EditorDimens
+import com.videoeditor.ui.theme.EmptyHint
+import com.videoeditor.ui.theme.SectionCard
 
 @Composable
 fun PreviewPlayer(uri: Uri?, modifier: Modifier = Modifier) {
@@ -52,17 +62,16 @@ fun PreviewPlayer(uri: Uri?, modifier: Modifier = Modifier) {
 }
 
 /**
- * Live edited viewport: respects viewportRes aspect and per-clip transform.
- * - Viewport box uses aspectRatio(viewportRes)
- * - If a clip is selected, isolates that clip's trimmed segment with live transform overlay (move/rotate/resize)
- * - Else shows stitched timeline (clipped concat)
- * Gestures update selected clip's ClipTransform and call onTransformChange.
+ * Live edited viewport — unified editor theme.
+ * - Capped height so it never pushes content off-screen.
+ * - Player layer is NOT transformed; only a selection outline is drawn.
+ * - Gestures live on a transparent overlay above controller-free zone.
  */
 @Composable
 fun TimelinePreview(
     timeline: TimelineState,
     onTransformChange: (String, ClipTransform) -> Unit = { _, _ -> },
-    onResetTransform: (String) -> Unit = {},
+    onSelect: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -72,7 +81,6 @@ fun TimelinePreview(
     val selected = timeline.selectedClip
     val viewportRes = timeline.viewportRes
 
-    // Choose playlist: isolated selected clip for transform editing, else stitched timeline
     val isIsolated = selected != null
     LaunchedEffect(timeline.clips, selected?.id, selected?.trimStartMs, selected?.trimEndMs) {
         if (timeline.clips.isEmpty()) {
@@ -117,90 +125,109 @@ fun TimelinePreview(
 
     DisposableEffect(Unit) { onDispose { player.release() } }
 
-    // Viewport box with aspect from viewportRes (single source drives export)
-    BoxWithConstraints(
-        modifier
-            .aspectRatio(viewportRes.aspect, matchHeightConstraintsFirst = false)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color.Black)
-    ) {
-        val viewportW = constraints.maxWidth.toFloat()
-        val viewportH = constraints.maxHeight.toFloat()
-
-        // Transformable video layer
-        val transform = selected?.transform ?: ClipTransform()
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    // offset fractions relative to viewport size (0 centered)
-                    translationX = transform.offsetXFraction * viewportW
-                    translationY = transform.offsetYFraction * viewportH
-                    scaleX = transform.scale
-                    scaleY = transform.scale
-                    rotationZ = transform.rotationDeg
-                }
-                .pointerInput(selected?.id) {
-                    if (selected == null) return@pointerInput
-                    detectTransformGestures { _, pan, zoom, rotation ->
-                        val cur = selected.transform
-                        // pan is in pixels, convert to fraction
-                        val dxFrac = pan.x / viewportW
-                        val dyFrac = pan.y / viewportH
-                        val newScale = (cur.scale * zoom).coerceIn(0.25f, 3.5f)
-                        val newRot = cur.rotationDeg + rotation
-                        val newOffX = (cur.offsetXFraction + dxFrac).coerceIn(-0.5f, 0.5f)
-                        val newOffY = (cur.offsetYFraction + dyFrac).coerceIn(-0.5f, 0.5f)
-                        onTransformChange(selected.id, cur.copy(offsetXFraction = newOffX, offsetYFraction = newOffY, scale = newScale, rotationDeg = newRot))
-                    }
-                }
+    SectionCard(modifier = modifier) {
+        // Title row lives outside video — no overlay over controls
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            AndroidView(factory = { ctx ->
-                PlayerView(ctx).apply {
-                    this.player = player
-                    useController = true
-                }
-            }, modifier = Modifier.fillMaxSize(), update = { it.player = player })
-        }
-
-        // Overlay handles/labels when clip selected
-        if (selected != null) {
-            Box(
-                Modifier
-                    .align(Alignment.TopStart)
-                    .background(Color.Black.copy(alpha = 0.55f), RoundedCornerShape(6.dp))
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    "${selected.displayName} • scale ${"%.2f".format(transform.scale)} • rot ${transform.rotationDeg.toInt()}°",
-                    color = Color.White, style = MaterialTheme.typography.labelSmall
-                )
-            }
-            if (transform != ClipTransform()) {
-                Box(Modifier.align(Alignment.TopEnd).padding(6.dp)) {
-                    androidx.compose.material3.FilledTonalButton(
-                        onClick = { onResetTransform(selected.id) },
-                        modifier = Modifier.height(28.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp)
-                    ) { Text("Reset", style = MaterialTheme.typography.labelSmall) }
-                }
-            }
-        }
-
-        // Viewport res badge
-        Box(
-            Modifier
-                .align(Alignment.BottomEnd)
-                .background(Color.White.copy(alpha = 0.85f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 6.dp, vertical = 2.dp)
-        ) {
-            Text("${viewportRes.label} ${viewportRes.width}x${viewportRes.height}", style = MaterialTheme.typography.labelSmall, color = Color.Black)
+            Text(
+                if (selected != null) "Preview • ${selected.displayName.take(20)}" else "Preview • stitched timeline",
+                color = EditorColors.Text,
+                style = MaterialTheme.typography.labelMedium
+            )
+            Text(
+                "${viewportRes.label} ${viewportRes.width}x${viewportRes.height}",
+                color = EditorColors.Sub,
+                style = MaterialTheme.typography.labelSmall
+            )
         }
 
         if (timeline.clips.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Import to preview", color = Color.Gray)
+            EmptyHint("Import videos to start preview")
+        } else {
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = EditorDimens.ViewportMaxHeight)
+                    .aspectRatio(viewportRes.aspect, matchHeightConstraintsFirst = false)
+                    .clip(RoundedCornerShape(EditorDimens.Radius))
+                    .background(Color.Black)
+            ) {
+                val viewportW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
+                val viewportH = constraints.maxHeight.toFloat().coerceAtLeast(1f)
+                val transform = selected?.transform ?: ClipTransform()
+
+                // 1. Video layer — no graphicsLayer, no gesture fight
+                AndroidView(factory = { ctx ->
+                    PlayerView(ctx).apply {
+                        this.player = player
+                        useController = true
+                    }
+                }, modifier = Modifier.fillMaxSize(), update = { it.player = player })
+
+                // 2. Transparent gesture layer (above video, below controller handled by PlayerView)
+                if (selected != null) {
+                    Box(
+                        Modifier
+                            .fillMaxSize()
+                            .pointerInput(selected.id, viewportW, viewportH) {
+                                detectTransformGestures { _, pan, zoom, rotation ->
+                                    val cur = selected.transform
+                                    val dxFrac = pan.x / viewportW
+                                    val dyFrac = pan.y / viewportH
+                                    val newScale = (cur.scale * zoom).coerceIn(0.25f, 3.5f)
+                                    val newRot = cur.rotationDeg + rotation
+                                    val newOffX = (cur.offsetXFraction + dxFrac).coerceIn(-0.5f, 0.5f)
+                                    val newOffY = (cur.offsetYFraction + dyFrac).coerceIn(-0.5f, 0.5f)
+                                    onTransformChange(
+                                        selected.id,
+                                        cur.copy(
+                                            offsetXFraction = newOffX,
+                                            offsetYFraction = newOffY,
+                                            scale = newScale,
+                                            rotationDeg = newRot
+                                        )
+                                    )
+                                }
+                            }
+                    )
+
+                    // 3. Selection outline mirrors transform without scaling video pixels
+                    Canvas(modifier = Modifier.fillMaxSize()) {
+                        val pad = 12f
+                        val cx = size.width / 2 + transform.offsetXFraction * size.width
+                        val cy = size.height / 2 + transform.offsetYFraction * size.height
+                        val w = (size.width * transform.scale - pad * 2).coerceAtLeast(24f)
+                        val h = (size.height * transform.scale - pad * 2).coerceAtLeast(24f)
+                        drawRoundRect(
+                            color = EditorColors.Primary,
+                            topLeft = Offset(cx - w / 2, cy - h / 2),
+                            size = Size(w, h),
+                            cornerRadius = CornerRadius(12f, 12f),
+                            style = Stroke(
+                                width = 3f,
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 8f))
+                            )
+                        )
+                        // corner dots
+                        listOf(
+                            Offset(cx - w / 2, cy - h / 2),
+                            Offset(cx + w / 2, cy - h / 2),
+                            Offset(cx - w / 2, cy + h / 2),
+                            Offset(cx + w / 2, cy + h / 2)
+                        ).forEach { drawCircle(EditorColors.Handle, 8f, it) }
+                    }
+                }
             }
+
+            Text(
+                if (timeline.clips.isEmpty()) "Import to preview"
+                else "Live: ${timeline.clips.size} clips stitched • tap clip below to edit • drag viewport to move, pinch to resize, twist to rotate",
+                color = EditorColors.Sub,
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
