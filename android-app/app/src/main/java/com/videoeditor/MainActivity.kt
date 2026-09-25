@@ -17,6 +17,7 @@ import androidx.compose.ui.unit.dp
 import com.videoeditor.engine.VideoEngine
 import com.videoeditor.timeline.TimelineClip
 import com.videoeditor.timeline.TimelineState
+import com.videoeditor.timeline.ViewportRes
 import com.videoeditor.ui.*
 import com.videoeditor.util.AssetProbe
 import com.videoeditor.util.Permissions
@@ -38,16 +39,14 @@ fun App() {
 
     var timeline by remember { mutableStateOf(TimelineState()) }
     var showExport by remember { mutableStateOf(false) }
-    var exportRes by remember { mutableStateOf(ExportRes.P1080) }
     var progress by remember { mutableIntStateOf(0) }
     var isExporting by remember { mutableStateOf(false) }
 
     val rustVer = remember { try { RustBridge.getVersion() } catch (_: Throwable) { "rust not loaded" } }
 
-    // Permissions launcher
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
         val granted = results.values.all { it }
-        if (!granted) Toast.makeText(ctx, "Permissions denied, import may fail on older Android", Toast.LENGTH_SHORT).show()
+        if (!granted) Toast.makeText(ctx, "Permissions denied, import may fail", Toast.LENGTH_SHORT).show()
     }
     LaunchedEffect(Unit) {
         if (!Permissions.isGranted(ctx)) permLauncher.launch(Permissions.forApi.toTypedArray())
@@ -58,7 +57,6 @@ fun App() {
             UriResolver.takePersistablePermission(ctx, uri)
             val probe = AssetProbe.probe(ctx, uri)
             val name = UriResolver.queryName(ctx, uri) ?: "clip_${timeline.clips.size + 1}.mp4"
-            // duration from probe, fallback 10s
             val durMs = probe.durationMs.coerceAtLeast(1000L)
             val clip = TimelineClip(
                 uri = uri,
@@ -81,6 +79,21 @@ fun App() {
         uris.forEach { handleImport(it) }
     }
 
+    // Map ViewportRes <-> ExportRes for dialog compatibility
+    fun viewportToExport(v: ViewportRes): ExportRes = when (v) {
+        ViewportRes.P720_LANDSCAPE -> ExportRes.P720
+        ViewportRes.P1080_LANDSCAPE -> ExportRes.P1080
+        ViewportRes.K4_LANDSCAPE -> ExportRes.K4
+        ViewportRes.P720_PORTRAIT -> ExportRes.P720
+        ViewportRes.P1080_PORTRAIT -> ExportRes.P1080
+        ViewportRes.SQUARE_1080 -> ExportRes.P1080
+    }
+    fun exportToViewport(e: ExportRes): ViewportRes = when (e) {
+        ExportRes.P720 -> ViewportRes.P720_LANDSCAPE
+        ExportRes.P1080 -> ViewportRes.P1080_LANDSCAPE
+        ExportRes.K4 -> ViewportRes.K4_LANDSCAPE
+    }
+
     Scaffold(topBar = {
         TopAppBar(title = { Text("Video Editor — $rustVer • ${timeline.totalDurationMs/1000f}s") })
     }) { pad ->
@@ -91,10 +104,27 @@ fun App() {
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Live edited preview: concatenates trimmed clips via clipping, not original file
-            TimelinePreview(timeline, Modifier.fillMaxWidth().height(220.dp))
+            // Viewport resolution selector — single source for preview + export (option a)
+            Text("Viewport = Export Resolution", style = MaterialTheme.typography.labelMedium)
+            ViewportResChips(
+                selected = timeline.viewportRes,
+                onSelect = { res -> timeline = timeline.withViewportRes(res) },
+                modifier = Modifier.fillMaxWidth()
+            )
             Text(
-                if (timeline.clips.isEmpty()) "Import to preview" else "Live preview: ${timeline.clips.size} clips stitched, trimming updates instantly",
+                "Selected ${timeline.viewportRes.label} ${timeline.viewportRes.width}x${timeline.viewportRes.height} — viewport aspect and export size linked",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary
+            )
+
+            // Live edited preview with per-clip transform (move/rotate/resize selected)
+            TimelinePreview(
+                timeline = timeline,
+                onTransformChange = { id, newTf -> timeline = timeline.setClipTransform(id, newTf) },
+                onResetTransform = { id -> timeline = timeline.resetClipTransform(id) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                if (timeline.clips.isEmpty()) "Import to preview" else "Live edited: ${timeline.clips.size} clips stitched. Tap clip to select, pinch/rotate/drag viewport to move/scale/rotate selected clip.",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary
             )
 
@@ -104,7 +134,7 @@ fun App() {
                 Button(
                     onClick = { showExport = true },
                     enabled = timeline.clips.isNotEmpty() && !isExporting
-                ) { Text("Export") }
+                ) { Text("Export ${timeline.viewportRes.label}") }
             }
 
             TimelineView(
@@ -117,36 +147,44 @@ fun App() {
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Text(
-                "Import videos, then drag handles or use sliders to trim. Tap split mid to cut clip at midpoint. Export stitches trimmed clips in order.",
-                style = MaterialTheme.typography.bodySmall
-            )
+            // Transform readout for selected clip
+            timeline.selectedClip?.let { sel ->
+                val tf = sel.transform
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    Text("Selected: ${sel.displayName}", style = MaterialTheme.typography.labelMedium, modifier = Modifier.weight(1f))
+                    OutlinedButton(onClick = { timeline = timeline.resetClipTransform(sel.id) }, enabled = tf != com.videoeditor.timeline.ClipTransform()) { Text("Reset pos") }
+                }
+                Text("x ${"%.2f".format(tf.offsetXFraction)} y ${"%.2f".format(tf.offsetYFraction)} scale ${"%.2f".format(tf.scale)} rot ${tf.rotationDeg.toInt()}°", style = MaterialTheme.typography.labelSmall)
+            }
 
             if (isExporting) {
                 LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
-                Text("Exporting $progress%", style = MaterialTheme.typography.bodySmall)
+                Text("Exporting $progress% to ${timeline.viewportRes.width}x${timeline.viewportRes.height}", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
 
     if (showExport) {
+        val expSel = viewportToExport(timeline.viewportRes)
         ExportDialog(
             progress = progress,
             isExporting = isExporting,
-            selected = exportRes,
-            onSelect = { exportRes = it },
+            selected = expSel,
+            onSelect = { e -> timeline = timeline.withViewportRes(exportToViewport(e)) },
             onExport = {
                 scope.launch {
                     isExporting = true; progress = 0
-                    val outFile = UriResolver.createOutputFile(ctx, "export_${System.currentTimeMillis()}.mp4")
+                    val outFile = UriResolver.createOutputFile(ctx, "export_${System.currentTimeMillis()}_${timeline.viewportRes.width}x${timeline.viewportRes.height}.mp4")
                     val engine = VideoEngine(ctx)
+                    // ExportConfig width/height ignored — engine uses timeline.viewportRes (option a)
                     val config = VideoEngine.ExportConfig(
-                        outWidth = exportRes.w, outHeight = exportRes.h, bitrate = exportRes.bitrate, fps = 30
+                        outWidth = timeline.viewportRes.width, outHeight = timeline.viewportRes.height,
+                        bitrate = timeline.viewportRes.bitrate, fps = 30
                     )
                     val result = engine.export(timeline, outFile.absolutePath, config) { p -> progress = p }
                     isExporting = false
                     if (result.isSuccess) {
-                        Toast.makeText(ctx, "Exported: ${result.getOrNull()}", Toast.LENGTH_LONG).show()
+                        Toast.makeText(ctx, "Exported ${outFile.name} ${timeline.viewportRes.label}", Toast.LENGTH_LONG).show()
                         android.media.MediaScannerConnection.scanFile(ctx, arrayOf(outFile.absolutePath), arrayOf("video/mp4"), null)
                     } else {
                         Toast.makeText(ctx, "Export failed: ${result.exceptionOrNull()?.message}", Toast.LENGTH_LONG).show()

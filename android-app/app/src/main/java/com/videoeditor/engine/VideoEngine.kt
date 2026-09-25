@@ -43,16 +43,19 @@ class VideoEngine(private val context: Context) {
         var cumulativeFrames = 0
         val estimatedTotalFrames = (totalDurationMs / 1000f * config.fps).toInt().coerceAtLeast(1)
 
+        // ViewportRes is single source for preview + export (option a)
+        val outWidth = timeline.viewportRes.width
+        val outHeight = timeline.viewportRes.height
+        val outBitrate = timeline.viewportRes.bitrate
+        val fps = config.fps
+
         val muxerWrapper = MuxerWrapper(outPath)
         var encoder: MediaCodec? = null
         var muxerStarted = false
         var cumulativePtsUs = 0L
-        // For correct PTS per clip, we need to know offset per clip's start in timeline
-        // cumulativeTrimDurationMs tracks timeline pts offset
         var cumulativeTimelineMs = 0L
 
         try {
-            // Validate via Rust if available (project json minimal)
             try {
                 val projJson = toProjectJson(timeline, config)
                 if (RustBridge.isAvailable()) {
@@ -62,7 +65,7 @@ class VideoEngine(private val context: Context) {
             } catch (e: Throwable) { Log.w("VideoEngine", "Rust validate skip: $e") }
 
             muxerWrapper.init()
-            encoder = Encoder(config.outWidth, config.outHeight, config.bitrate, config.fps).init()
+            encoder = Encoder(outWidth, outHeight, outBitrate, fps).init()
             encoder.start()
 
             val bufferInfo = MediaCodec.BufferInfo()
@@ -130,16 +133,39 @@ class VideoEngine(private val context: Context) {
                                     if (RustBridge.isAvailable() && config.filterJson != "[]") {
                                         try { RustBridge.processFrameYUV420(i420.y, i420.u, i420.v, i420.width, i420.height, config.filterJson) } catch (e: Exception) { Log.w("VideoEngine", "Rust filter $e") }
                                     }
-                                    // Scale to export dims if needed
-                                    val toEncode: YUVConverter.I420Buffers = if (i420.width != config.outWidth || i420.height != config.outHeight) {
-                                        val dst = YUVConverter.allocateI420(config.outWidth, config.outHeight)
-                                        try {
-                                            if (RustBridge.isAvailable()) {
-                                                RustBridge.scaleFrameYUV420(i420.y, i420.u, i420.v, i420.width, i420.height, dst.y, dst.u, dst.v, config.outWidth, config.outHeight)
-                                                dst
+                                    // Viewport-aware + per-clip transform (move/resize). Rotation preview-only for now.
+                                    val tf = clip.transform
+                                    val needsTransform = tf.offsetXFraction != 0f || tf.offsetYFraction != 0f || tf.scale != 1f || tf.rotationDeg != 0f
+                                    val toEncode: YUVConverter.I420Buffers = run {
+                                        if (!needsTransform && i420.width == outWidth && i420.height == outHeight) {
+                                            i420
+                                        } else {
+                                            // Scaled size
+                                            val scaledW = if (tf.scale != 1f) (i420.width * tf.scale).toInt().coerceIn(2, outWidth).let { it and 1.inv() } else i420.width
+                                            val scaledH = if (tf.scale != 1f) (i420.height * tf.scale).toInt().coerceIn(2, outHeight).let { it and 1.inv() } else i420.height
+                                            val scaledSrc: YUVConverter.I420Buffers = if (scaledW != i420.width || scaledH != i420.height) {
+                                                val tmp = YUVConverter.allocateI420(scaledW, scaledH)
+                                                try {
+                                                    if (RustBridge.isAvailable()) {
+                                                        RustBridge.scaleFrameYUV420(i420.y, i420.u, i420.v, i420.width, i420.height, tmp.y, tmp.u, tmp.v, scaledW, scaledH)
+                                                        tmp
+                                                    } else i420
+                                                } catch (_: Throwable) { i420 }
                                             } else i420
-                                        } catch (_: Throwable) { i420 }
-                                    } else i420
+
+                                            // If no offset/rotation and scaled already matches viewport, just use scaledSrc
+                                            if (tf.offsetXFraction == 0f && tf.offsetYFraction == 0f && tf.rotationDeg == 0f && scaledSrc.width == outWidth && scaledSrc.height == outHeight) {
+                                                scaledSrc
+                                            } else {
+                                                if (tf.rotationDeg != 0f) Log.w("VideoEngine", "Rotation ${tf.rotationDeg}° live preview only, export composites with scale/offset for now")
+                                                val dst = YUVConverter.allocateI420(outWidth, outHeight).also { fillBlack(it) }
+                                                val offX = ((outWidth - scaledSrc.width) / 2 + (tf.offsetXFraction * outWidth).toInt()).coerceIn(0, outWidth - scaledSrc.width)
+                                                val offY = ((outHeight - scaledSrc.height) / 2 + (tf.offsetYFraction * outHeight).toInt()).coerceIn(0, outHeight - scaledSrc.height)
+                                                compositeI420(dst, scaledSrc, offX, offY)
+                                                dst
+                                            }
+                                        }
+                                    }
 
                                     // PTS: timeline pts = cumulativeTimelineMs*1000 + (decoderPts - trimStartUs)
                                     val relativePtsUs = (bufferInfo.presentationTimeUs - trimStartUs).coerceAtLeast(0L)
@@ -275,11 +301,50 @@ class VideoEngine(private val context: Context) {
         }
     }
 
-    private fun toProjectJson(timeline: TimelineState, config: ExportConfig): String {
-        val res = when (config.outWidth) { 1280 -> "720p"; 3840 -> "4K"; else -> "1080p" }
-        val clipsJson = timeline.clips.joinToString(",") { c ->
-            """{"path":"${c.uri}","trim_start_ms":${c.trimStartMs},"trim_end_ms":${c.trimEndMs},"transforms":[],"volume":1.0}"""
+    private fun fillBlack(dst: YUVConverter.I420Buffers) {
+        // Y black = 16, U/V neutral = 128
+        for (i in 0 until dst.y.capacity()) dst.y.put(i, 16.toByte())
+        for (i in 0 until dst.u.capacity()) dst.u.put(i, 128.toByte())
+        for (i in 0 until dst.v.capacity()) dst.v.put(i, 128.toByte())
+        dst.y.rewind(); dst.u.rewind(); dst.v.rewind()
+    }
+
+    private fun compositeI420(dst: YUVConverter.I420Buffers, src: YUVConverter.I420Buffers, offX: Int, offY: Int) {
+        // Y plane
+        val dstW = dst.width; val srcW = src.width; val srcH = src.height
+        for (y in 0 until srcH) {
+            val dy = offY + y
+            if (dy !in 0 until dst.height) continue
+            for (x in 0 until srcW) {
+                val dx = offX + x
+                if (dx !in 0 until dstW) continue
+                dst.y.put(dy * dstW + dx, src.y.get(y * srcW + x))
+            }
         }
-        return """{"clips":[${clipsJson}],"output_width":${config.outWidth},"output_height":${config.outHeight},"resolution":"${res}","fps":${config.fps},"bitrate":${config.bitrate}}"""
+        // U/V planes 1/2 subsampled, offsets /2
+        val dstWU = dstW / 2; val srcWU = srcW / 2; val srcHU = srcH / 2
+        val offXU = offX / 2; val offYU = offY / 2
+        for (y in 0 until srcHU) {
+            val dy = offYU + y
+            if (dy !in 0 until dst.height / 2) continue
+            for (x in 0 until srcWU) {
+                val dx = offXU + x
+                if (dx !in 0 until dstWU) continue
+                dst.u.put(dy * dstWU + dx, src.u.get(y * srcWU + x))
+                dst.v.put(dy * dstWU + dx, src.v.get(y * srcWU + x))
+            }
+        }
+        dst.y.rewind(); dst.u.rewind(); dst.v.rewind()
+    }
+
+    private fun toProjectJson(timeline: TimelineState, config: ExportConfig): String {
+        val vw = timeline.viewportRes.width
+        val vh = timeline.viewportRes.height
+        val br = timeline.viewportRes.bitrate
+        val res = when (vw) { 1280 -> "720p"; 3840 -> "4K"; else -> "${vh}p" }
+        val clipsJson = timeline.clips.joinToString(",") { c ->
+            """{"path":"${c.uri}","trim_start_ms":${c.trimStartMs},"trim_end_ms":${c.trimEndMs},"transform":{"x":${c.transform.offsetXFraction},"y":${c.transform.offsetYFraction},"scale":${c.transform.scale},"rot":${c.transform.rotationDeg}},"volume":1.0}"""
+        }
+        return """{"clips":[${clipsJson}],"output_width":${vw},"output_height":${vh},"resolution":"${res}","fps":${config.fps},"bitrate":${br}}"""
     }
 }

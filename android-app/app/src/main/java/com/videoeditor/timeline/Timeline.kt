@@ -4,6 +4,29 @@ import android.net.Uri
 import java.util.UUID
 
 /**
+ * Per-clip spatial transform for move/rotate/resize in viewport.
+ * offset fractions are relative to viewport size (0 = centered). scale 1 = fit, rotation in degrees.
+ */
+data class ClipTransform(
+    val offsetXFraction: Float = 0f,
+    val offsetYFraction: Float = 0f,
+    val scale: Float = 1f,
+    val rotationDeg: Float = 0f
+)
+
+/** Viewport resolution — single source for preview and export (option a) */
+enum class ViewportRes(val width: Int, val height: Int, val bitrate: Int, val label: String) {
+    P720_LANDSCAPE(1280, 720, 5_000_000, "720p 16:9"),
+    P1080_LANDSCAPE(1920, 1080, 10_000_000, "1080p 16:9"),
+    K4_LANDSCAPE(3840, 2160, 35_000_000, "4K 16:9"),
+    P720_PORTRAIT(720, 1280, 5_000_000, "720p 9:16"),
+    P1080_PORTRAIT(1080, 1920, 10_000_000, "1080p 9:16"),
+    SQUARE_1080(1080, 1080, 8_000_000, "1080x1080 1:1");
+
+    val aspect: Float get() = width.toFloat() / height.toFloat()
+}
+
+/**
  * Single clip on timeline. Trim is relative to original asset duration.
  * trimStartMs inclusive, trimEndMs exclusive. Valid: 0 <= trimStart < trimEnd <= durationMs
  */
@@ -13,7 +36,8 @@ data class TimelineClip(
     val displayName: String,
     val durationMs: Long,
     val trimStartMs: Long = 0L,
-    val trimEndMs: Long = durationMs
+    val trimEndMs: Long = durationMs,
+    val transform: ClipTransform = ClipTransform()
 ) {
     val trimmedDurationMs: Long get() = (trimEndMs - trimStartMs).coerceAtLeast(0L)
 
@@ -22,6 +46,10 @@ data class TimelineClip(
         val e = newEndMs.coerceIn(s + 1, durationMs)
         return copy(trimStartMs = s, trimEndMs = e)
     }
+
+    fun withTransform(newTransform: ClipTransform): TimelineClip = copy(transform = newTransform)
+
+    fun withTransform(block: ClipTransform.() -> ClipTransform): TimelineClip = copy(transform = block(transform))
 
     fun split(atMsInTrim: Long): Pair<TimelineClip, TimelineClip>? {
         // at is absolute within original asset time, must be inside (trimStart, trimEnd)
@@ -34,7 +62,8 @@ data class TimelineClip(
 
 data class TimelineState(
     val clips: List<TimelineClip> = emptyList(),
-    val selectedId: String? = null
+    val selectedId: String? = null,
+    val viewportRes: ViewportRes = ViewportRes.P1080_LANDSCAPE
 ) {
     val totalDurationMs: Long get() = clips.sumOf { it.trimmedDurationMs }
     val selectedClip: TimelineClip? get() = clips.find { it.id == selectedId }
@@ -100,4 +129,18 @@ data class TimelineState(
         val end = start + clips[idx].trimmedDurationMs
         return start..end
     }
+
+    fun withViewportRes(res: ViewportRes): TimelineState = copy(viewportRes = res)
+
+    fun updateClipTransform(id: String, block: ClipTransform.() -> ClipTransform): TimelineState {
+        val newClips = clips.map { if (it.id == id) it.withTransform(block) else it }
+        return copy(clips = newClips)
+    }
+
+    fun setClipTransform(id: String, transform: ClipTransform): TimelineState {
+        val newClips = clips.map { if (it.id == id) it.copy(transform = transform) else it }
+        return copy(clips = newClips)
+    }
+
+    fun resetClipTransform(id: String): TimelineState = setClipTransform(id, ClipTransform())
 }
