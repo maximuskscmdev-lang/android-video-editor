@@ -54,11 +54,11 @@ fun TimelineView(
                         val mid = (c.trimStartMs + c.trimEndMs) / 2
                         onSplit(c.id, mid)
                     }, modifier = Modifier.height(32.dp)) {
-                        Icon(Icons.Default.ContentCut, null, modifier = Modifier.size(14.dp))
+                        Icon(Icons.Filled.ContentCut, null, modifier = Modifier.size(14.dp))
                         Spacer(Modifier.width(4.dp)); Text("Split mid", style = MaterialTheme.typography.labelSmall)
                     }
                     IconButton(onClick = { state.selectedClip?.let { onRemove(it.id) } }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Default.Delete, "remove", tint = Color(0xFFFF6B6B))
+                        Icon(Icons.Filled.Delete, "remove", tint = Color(0xFFFF6B6B))
                     }
                 }
             }

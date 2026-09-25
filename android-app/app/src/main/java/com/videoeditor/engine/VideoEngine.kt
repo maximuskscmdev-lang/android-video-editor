@@ -166,9 +166,9 @@ class VideoEngine(private val context: Context) {
                                 sawDecoderEOS = true
                                 sawInputEOS = true
                             }
-                        } else {
-                            decoder.releaseOutputBuffer(outIdx, false)
-                            if (isEOS) sawDecoderEOS = true
+                        }
+                        else -> {
+                            // No output available (TRY_AGAIN_LATER) - nothing to do
                         }
                     }
 
