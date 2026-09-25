@@ -81,8 +81,6 @@ fun App() {
         uris.forEach { handleImport(it) }
     }
 
-    val selectedUri = timeline.selectedClip?.uri
-
     Scaffold(topBar = {
         TopAppBar(title = { Text("Video Editor — $rustVer • ${timeline.totalDurationMs/1000f}s") })
     }) { pad ->
@@ -93,8 +91,12 @@ fun App() {
                 .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Preview of selected clip (plays original uri, user can see trim range via timeline)
-            PreviewPlayer(selectedUri, Modifier.fillMaxWidth().height(220.dp))
+            // Live edited preview: concatenates trimmed clips via clipping, not original file
+            TimelinePreview(timeline, Modifier.fillMaxWidth().height(220.dp))
+            Text(
+                if (timeline.clips.isEmpty()) "Import to preview" else "Live preview: ${timeline.clips.size} clips stitched, trimming updates instantly",
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary
+            )
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
                 Button(onClick = { pickSingle.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly)) }) { Text("Add Video") }
