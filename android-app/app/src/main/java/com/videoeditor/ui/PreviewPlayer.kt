@@ -19,8 +19,11 @@ fun PreviewPlayer(uri: Uri?, modifier: Modifier = Modifier) {
         if (uri != null) {
             player.setMediaItem(MediaItem.fromUri(uri))
             player.prepare()
+            player.playWhenReady = false
+        } else {
+            player.clearMediaItems()
         }
-        onDispose { }
+        onDispose {}
     }
     DisposableEffect(Unit) { onDispose { player.release() } }
 
@@ -29,5 +32,7 @@ fun PreviewPlayer(uri: Uri?, modifier: Modifier = Modifier) {
             this.player = player
             useController = true
         }
-    }, modifier = modifier)
+    }, modifier = modifier, update = { view ->
+        view.player = player
+    })
 }

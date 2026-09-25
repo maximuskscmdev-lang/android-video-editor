@@ -1,9 +1,11 @@
 package com.videoeditor.engine
 
+import android.content.Context
 import android.media.MediaExtractor
 import android.media.MediaFormat
+import android.net.Uri
 
-class Decoder(private val path: String) {
+class Decoder(private val context: Context, private val uri: Uri) {
     val extractor = MediaExtractor()
     var videoTrackIndex: Int = -1
         private set
@@ -19,7 +21,10 @@ class Decoder(private val path: String) {
         private set
 
     fun init() {
-        extractor.setDataSource(path)
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+            extractor.setDataSource(pfd.fileDescriptor)
+        } ?: throw IllegalArgumentException("Cannot open $uri")
+
         for (i in 0 until extractor.trackCount) {
             val fmt = extractor.getTrackFormat(i)
             val m = fmt.getString(MediaFormat.KEY_MIME) ?: ""
@@ -27,17 +32,15 @@ class Decoder(private val path: String) {
                 videoTrackIndex = i
                 videoFormat = fmt
                 mime = m
-                width = fmt.getInteger(MediaFormat.KEY_WIDTH)
-                height = fmt.getInteger(MediaFormat.KEY_HEIGHT)
-                durationUs = fmt.getLong(MediaFormat.KEY_DURATION)
+                width = try { fmt.getInteger(MediaFormat.KEY_WIDTH) } catch (_: Exception) { 0 }
+                height = try { fmt.getInteger(MediaFormat.KEY_HEIGHT) } catch (_: Exception) { 0 }
+                durationUs = try { fmt.getLong(MediaFormat.KEY_DURATION) } catch (_: Exception) { 0L }
                 extractor.selectTrack(i)
                 break
             }
         }
-        check(videoTrackIndex != -1) { "No video track in $path" }
+        check(videoTrackIndex != -1) { "No video track in $uri" }
     }
 
-    fun seekTo(us: Long) { extractor.seekTo(us, MediaExtractor.SEEK_TO_CLOSEST_SYNC) }
-
-    fun release() { extractor.release() }
+    fun release() { try { extractor.release() } catch (_: Exception) {} }
 }

@@ -14,7 +14,7 @@ enum class ExportRes(val w: Int, val h: Int, val bitrate: Int, val label: String
 
 @Composable
 fun ExportDialog(
-    progress: Int, // 0..100
+    progress: Int,
     isExporting: Boolean,
     selected: ExportRes,
     onSelect: (ExportRes) -> Unit,
@@ -27,13 +27,15 @@ fun ExportDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 ExportRes.entries.forEach { r ->
-                    Row {
-                        RadioButton(selected = selected == r, onClick = { onSelect(r) })
-                        Text(r.label, modifier = Modifier.padding(start = 8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Row {
+                            RadioButton(selected = selected == r, onClick = { onSelect(r) })
+                            Text(r.label, modifier = Modifier.padding(start = 8.dp))
+                        }
                     }
                 }
                 if (isExporting) {
-                    LinearProgressIndicator(progress = progress / 100f, modifier = Modifier.fillMaxWidth())
+                    LinearProgressIndicator(progress = { progress / 100f }, modifier = Modifier.fillMaxWidth())
                     Text("$progress %")
                 }
             }

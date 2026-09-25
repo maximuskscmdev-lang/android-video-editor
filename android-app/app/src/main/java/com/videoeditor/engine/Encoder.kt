@@ -4,10 +4,6 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 
-/**
- * Hardware encoder via MediaCodec. Output muxed via MuxerWrapper.
- * Handles 720p/1080p/4K; queries capability and falls back if 4K not supported.
- */
 class Encoder(
     private val outWidth: Int,
     private val outHeight: Int,
@@ -25,20 +21,13 @@ class Encoder(
         private set
 
     fun init(): MediaCodec {
-        // Check 4K support
-        if (outWidth == 3840 || outHeight == 2160) {
-            val list = MediaCodecInfo::class.java // placeholder; real check in Activity via MediaCodecList
-        }
-        // Ensure even dims for YUV420
         actualWidth = outWidth and 1.inv()
         actualHeight = outHeight and 1.inv()
-
         format = MediaFormat.createVideoFormat(mime, actualWidth, actualHeight).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
             setInteger(MediaFormat.KEY_BIT_RATE, bitrate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
             setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 1)
-            // Optional: KEY_PROFILE/LEVEL for AVC
         }
         codec = MediaCodec.createEncoderByType(mime).apply { configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE) }
         return codec!!
